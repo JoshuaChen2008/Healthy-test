@@ -8,9 +8,7 @@ generator erd {
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  provider = "postgresql"
 }
 
 // Prisma enums are used here instead of app-layer-only validation because this
