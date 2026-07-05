@@ -1,0 +1,95 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+generator erd {
+  provider = "prisma-erd-generator"
+  output   = "../docs/schema-erd.svg"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// Prisma enums are used here instead of app-layer-only validation because this
+// task does not add API code yet, so the database schema can enforce the sets.
+enum Gender {
+  male
+  female
+  other
+}
+
+enum Goal {
+  lose_weight
+  build_muscle
+  improve_fitness
+  improve_health
+}
+
+enum WorkoutFrequency {
+  never
+  rarely
+  few_times_week
+  often
+  daily
+}
+
+enum AssessmentStatus {
+  in_progress
+  completed
+}
+
+enum SubscriptionStatus {
+  free
+  active
+}
+
+model User {
+  id           String        @id @default(uuid()) @db.Uuid
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+  assessments  Assessment[]
+  subscription Subscription?
+
+  @@map("users")
+}
+
+model Assessment {
+  id                  String            @id @default(uuid()) @db.Uuid
+  gender              Gender?
+  goal                Goal?
+  age                 Int?
+  heightCm            Float?            @map("height_cm")
+  weightKg            Float?            @map("weight_kg")
+  targetWeightKg      Float?            @map("target_weight_kg")
+  workoutFrequency    WorkoutFrequency? @map("workout_frequency")
+  answers             Json              @default("{}")
+  email               String?
+  name                String?
+  currentStep         Int               @default(0) @map("current_step")
+  status              AssessmentStatus  @default(in_progress)
+  bmi                 Float?
+  recommendedCalories Int?              @map("recommended_calories")
+  targetDate          DateTime?         @map("target_date")
+  createdAt           DateTime          @default(now()) @map("created_at")
+  updatedAt           DateTime          @updatedAt @map("updated_at")
+  userId              String            @map("user_id") @db.Uuid
+  user                User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("assessments")
+}
+
+model Subscription {
+  id        String             @id @default(uuid()) @db.Uuid
+  userId    String             @unique @map("user_id") @db.Uuid
+  status    SubscriptionStatus @default(free)
+  paidAt    DateTime?          @map("paid_at")
+  createdAt DateTime           @default(now()) @map("created_at")
+  updatedAt DateTime           @updatedAt @map("updated_at")
+  user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("subscriptions")
+}
