@@ -12,6 +12,10 @@ export const createAssessmentSchema = z.strictObject({
   userId: z.uuid("userId must be a valid UUID"),
 });
 
+export const paySchema = z.strictObject({
+  userId: z.uuid("userId must be a valid UUID"),
+});
+
 export const genderSchema = z.enum(["male", "female", "other"]);
 
 export const goalSchema = z.enum([
@@ -47,6 +51,7 @@ export const updateAssessmentSchema = z.strictObject({
 
 export type RouteIdParams = z.infer<typeof routeIdParamsSchema>;
 export type CreateAssessmentInput = z.infer<typeof createAssessmentSchema>;
+export type PayInput = z.infer<typeof paySchema>;
 export type UpdateAssessmentInput = z.infer<typeof updateAssessmentSchema>;
 
 export function getValidationErrorMessage(error: z.ZodError) {
@@ -59,4 +64,3 @@ export function getValidationErrorMessage(error: z.ZodError) {
   const path = issue.path.length > 0 ? `${issue.path.join(".")}: ` : "";
   return `${path}${issue.message}`;
 }
-

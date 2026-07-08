@@ -96,7 +96,7 @@ export async function PATCH(request: Request, context: RouteContext) {
   }
 
   const parsed = updateAssessmentSchema.safeParse(body);
-
+//校验body字段
   if (!parsed.success) {
     return Response.json(
       { error: getValidationErrorMessage(parsed.error) },

@@ -163,3 +163,143 @@ curl -X PATCH http://localhost:3000/api/assessments/00000000-0000-0000-0000-0000
 curl http://localhost:3000/api/assessments/00000000-0000-0000-0000-000000000000
 ```
 
+## POST /api/assessments/:id/submit
+
+提交一次测评并计算结果。已完成的测评可重复提交，会重新计算并覆盖结果。
+
+**请求体**
+
+无。可发送空 body 或 `{}`。
+
+**成功响应**
+
+`200 OK`
+
+```json
+{
+  "status": "completed",
+  "bmi": 24.2,
+  "recommendedCalories": 1850
+}
+```
+
+**状态码**
+
+- `200`：提交并计算成功
+- `400`：id 不是 UUID，或核心字段未填完整
+- `404`：测评不存在
+- `500`：服务端提交失败
+
+**curl**
+
+```bash
+curl -X POST http://localhost:3000/api/assessments/00000000-0000-0000-0000-000000000000/submit \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
+## GET /api/assessments/:id/result
+
+读取测评结果。非会员隐藏被保护字段 `targetDate`；会员返回完整结果。
+
+**请求体**
+
+无。
+
+**非会员成功响应**
+
+`200 OK`
+
+```json
+{
+  "assessmentId": "uuid",
+  "status": "completed",
+  "membership": "free",
+  "bmi": 24.2,
+  "recommendedCalories": 1850,
+  "locked": {
+    "targetDate": true
+  },
+  "upsell": "解锁完整结果，查看你的目标达成日期与个性化计划"
+}
+```
+
+**会员成功响应**
+
+`200 OK`
+
+```json
+{
+  "assessmentId": "uuid",
+  "status": "completed",
+  "membership": "active",
+  "bmi": 24.2,
+  "recommendedCalories": 1850,
+  "targetDate": "2026-11-01T00:00:00.000Z"
+}
+```
+
+**状态码**
+
+- `200`：读取成功
+- `400`：id 不是 UUID
+- `404`：测评不存在
+- `409`：测评尚未提交
+- `500`：服务端读取失败，或测评结果不完整
+
+**curl**
+
+```bash
+curl http://localhost:3000/api/assessments/00000000-0000-0000-0000-000000000000/result
+```
+
+## POST /api/pay
+
+模拟支付。把用户订阅状态置为 `active`，并记录支付时间。已支付用户可重复调用。
+
+**请求体**
+
+```json
+{ "userId": "uuid" }
+```
+
+**成功响应**
+
+`200 OK`
+
+```json
+{ "status": "active" }
+```
+
+**状态码**
+
+- `200`：支付成功，或用户原本已是 active
+- `400`：`userId` 缺失、不是 UUID，或请求体 JSON 格式错误
+- `404`：用户不存在
+- `500`：服务端支付失败
+
+**curl**
+
+```bash
+curl -X POST http://localhost:3000/api/pay \
+  -H "Content-Type: application/json" \
+  -d '{"userId":"00000000-0000-0000-0000-000000000000"}'
+```
+
+**付费前 vs 付费后**
+
+同一个 `assessmentId`，支付前调用 result 不会返回真实 `targetDate`：
+
+```bash
+curl http://localhost:3000/api/assessments/00000000-0000-0000-0000-000000000000/result
+```
+
+支付后再次调用同一接口会返回完整结果：
+
+```bash
+curl -X POST http://localhost:3000/api/pay \
+  -H "Content-Type: application/json" \
+  -d '{"userId":"11111111-1111-1111-1111-111111111111"}'
+
+curl http://localhost:3000/api/assessments/00000000-0000-0000-0000-000000000000/result
+```
