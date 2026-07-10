@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "postinstall": "prisma generate --generator client",
     "start": "next start",
     "test": "vitest run",
     "test:watch": "vitest",

@@ -24,6 +24,41 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## 环境变量
+
+本地运行时，将 `.env.example` 复制为 `.env` 并填写可用的 PostgreSQL 连接串：
+
+```bash
+cp .env.example .env
+```
+
+部署到 Vercel 时，在项目的环境变量中配置 `DATABASE_URL` 即可；不要提交真实连接串或密钥。
+
+## API 文档
+
+所有接口的请求、响应和完整 curl 示例见 [`docs/api.md`](docs/api.md)。下面用同一个 `assessmentId` 展示 `/pay` 付费前后的结果差异。
+
+付费前，结果接口会隐藏真实的 `targetDate`：
+
+```bash
+curl http://localhost:3000/api/assessments/00000000-0000-0000-0000-000000000000/result
+```
+
+调用 `/pay` 后，再查询同一份评估会返回完整结果：
+
+```bash
+curl -X POST http://localhost:3000/api/pay \
+  -H "Content-Type: application/json" \
+  -d '{"userId":"11111111-1111-1111-1111-111111111111"}'
+
+curl http://localhost:3000/api/assessments/00000000-0000-0000-0000-000000000000/result
+```
+
+## 在线演示 / 已支付 sessionId
+
+- 线上地址：TODO(部署后填 Vercel URL)
+- 已支付测试 userId：TODO(部署后用 /api/pay 造一个并填这里)
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
