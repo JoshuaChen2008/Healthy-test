@@ -56,8 +56,9 @@ curl http://localhost:3000/api/assessments/00000000-0000-0000-0000-000000000000/
 
 ## 在线演示 / 已支付 sessionId
 
-- 线上地址：TODO(部署后填 Vercel URL)
-- 已支付测试 userId：TODO(部署后用 /api/pay 造一个并填这里)
+- 线上地址：https://healthy-test.vercel.app
+- 已支付测试 userId：`91253b81-77f4-4537-986f-cafcd1c916a5`
+- 已完成测评 assessmentId：`4bbcb828-fc53-4a5a-a44d-a065526ebf7e`（可直接 GET 其 `/result`，验证付费后返回完整 `targetDate`）
 
 ## Learn More
 
