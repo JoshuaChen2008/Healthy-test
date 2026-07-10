@@ -34,6 +34,14 @@ cp .env.example .env
 
 部署到 Vercel 时，在项目的环境变量中配置 `DATABASE_URL` 即可；不要提交真实连接串或密钥。
 
+## 数据库设计
+
+三张表（`users` / `assessments` / `subscriptions`）及其关系见关系图 [`docs/schema-erd.svg`](docs/schema-erd.svg)，设计说明见 [`docs/schema-design.md`](docs/schema-design.md)。
+
+## AI 使用复盘
+
+本项目的 AI 协作方式、分工、以及两次调试案例见 [`docs/ai-retrospective.md`](docs/ai-retrospective.md)。
+
 ## API 文档
 
 所有接口的请求、响应和完整 curl 示例见 [`docs/api.md`](docs/api.md)。下面用同一个 `assessmentId` 展示 `/pay` 付费前后的结果差异。
@@ -59,21 +67,6 @@ curl http://localhost:3000/api/assessments/00000000-0000-0000-0000-000000000000/
 - 线上地址：https://healthy-test.vercel.app
 - 已支付测试 userId：`91253b81-77f4-4537-986f-cafcd1c916a5`
 - 已完成测评 assessmentId：`4bbcb828-fc53-4a5a-a44d-a065526ebf7e`（可直接 GET 其 `/result`，验证付费后返回完整 `targetDate`）
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
 
 ## Testing
 
@@ -101,10 +94,12 @@ DATABASE_URL="postgresql://postgres:postgres@localhost:5432/health_assessment_te
 Then prepare the schema:
 
 ```bash
-npx prisma generate
+npx prisma generate --generator client
 npx prisma db push
 npm test
 ```
+
+`--generator client` 只生成测试需要的 Prisma Client；不加的话会连带触发 `docs/schema-erd.svg` 的关系图重新渲染，这一步依赖无头 Chromium，在没有现成浏览器缓存的环境（如某些 CI/容器）里会直接失败。
 
 Each test resets data before it runs by deleting `assessment`, then `subscription`, then `user` records, so test cases remain isolated from each other.
 
