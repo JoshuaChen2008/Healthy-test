@@ -1,69 +1,97 @@
-import { prisma } from "@/lib/prisma";
+import { ASSESSMENT_PUBLIC_SELECT } from '@/lib/assessment';
+import { getSessionPrincipal } from '@/lib/auth';
+import { invalidJsonResponse, jsonResponse, readJsonBody } from '@/lib/http';
+import { prisma } from '@/lib/prisma';
+import { isPrismaError } from '@/lib/prisma-errors';
+import { verifySameOrigin } from '@/lib/request-security';
 import {
   createAssessmentSchema,
   getValidationErrorMessage,
-} from "@/lib/validation";
+} from '@/lib/validation';
 
-async function readJsonBody(request: Request) {
-  const text = await request.text();
+export async function POST(request: Request): Promise<Response> {
+  const originError = verifySameOrigin(request);
 
-  if (!text.trim()) {
-    return {};
+  if (originError !== undefined) {
+    return originError;
   }
 
-  return JSON.parse(text) as unknown;
-}
-
-export async function POST(request: Request) {
   let body: unknown;
 
   try {
     body = await readJsonBody(request);
   } catch {
-    return Response.json({ error: "Request body must be valid JSON." }, { status: 400 });
+    return invalidJsonResponse();
   }
 
   const parsed = createAssessmentSchema.safeParse(body);
 
   if (!parsed.success) {
-    return Response.json(
+    return jsonResponse(
       { error: getValidationErrorMessage(parsed.error) },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
-  try {
-    const user = await prisma.user.findUnique({
-      where: {
-        id: parsed.data.userId,
-      },
-      select: {
-        id: true,
-      },
-    });
+  const principal = await getSessionPrincipal(request);
 
-    if (!user) {
-      return Response.json({ error: "User not found." }, { status: 404 });
+  if (principal === null) {
+    return jsonResponse({ error: 'Authentication required.' }, { status: 401 });
+  }
+
+  try {
+    if (parsed.data.restart === true) {
+      const assessment = await prisma.$transaction(async (transaction) => {
+        await transaction.assessment.updateMany({
+          where: { userId: principal.userId, status: 'in_progress' },
+          data: { status: 'abandoned' },
+        });
+
+        return transaction.assessment.create({
+          data: { userId: principal.userId },
+          select: ASSESSMENT_PUBLIC_SELECT,
+        });
+      });
+
+      return jsonResponse(assessment, { status: 201 });
     }
 
-    const assessment = await prisma.assessment.create({
-      data: {
-        userId: user.id,
-        currentStep: 0,
-        status: "in_progress",
-        answers: {},
-      },
-      select: {
-        id: true,
-      },
-    });
+    const existing = await findActiveAssessment(principal.userId);
 
-    return Response.json({ assessmentId: assessment.id }, { status: 201 });
-  } catch {
-    return Response.json(
-      { error: "Failed to create assessment." },
-      { status: 500 }
+    if (existing !== null) {
+      return jsonResponse(existing);
+    }
+
+    try {
+      const created = await prisma.assessment.create({
+        data: { userId: principal.userId },
+        select: ASSESSMENT_PUBLIC_SELECT,
+      });
+      return jsonResponse(created, { status: 201 });
+    } catch (error: unknown) {
+      if (isPrismaError(error, 'P2002')) {
+        const racedAssessment = await findActiveAssessment(principal.userId);
+
+        if (racedAssessment !== null) {
+          return jsonResponse(racedAssessment);
+        }
+      }
+
+      throw error;
+    }
+  } catch (error: unknown) {
+    console.error('Failed to create or restore an assessment.', error);
+    return jsonResponse(
+      { error: 'Failed to create assessment.' },
+      { status: 500 },
     );
   }
 }
 
+async function findActiveAssessment(userId: string) {
+  return prisma.assessment.findFirst({
+    where: { userId, status: 'in_progress' },
+    orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+    select: ASSESSMENT_PUBLIC_SELECT,
+  });
+}

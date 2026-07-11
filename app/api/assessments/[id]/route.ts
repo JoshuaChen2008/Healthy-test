@@ -1,89 +1,73 @@
-import { Prisma } from "@prisma/client";
-
-import { prisma } from "@/lib/prisma";
+import { ASSESSMENT_PUBLIC_SELECT, getDerivedCurrentStep } from '@/lib/assessment';
+import { getSessionPrincipal } from '@/lib/auth';
+import { invalidJsonResponse, jsonResponse, readJsonBody } from '@/lib/http';
+import { prisma } from '@/lib/prisma';
+import { verifySameOrigin } from '@/lib/request-security';
 import {
   getValidationErrorMessage,
   routeIdParamsSchema,
   updateAssessmentSchema,
-} from "@/lib/validation";
+} from '@/lib/validation';
 
-type RouteContext = {
-  params: Promise<{
-    id: string;
-  }>;
-};
-
-async function readJsonBody(request: Request) {
-  const text = await request.text();
-
-  if (!text.trim()) {
-    return {};
-  }
-
-  return JSON.parse(text) as unknown;
+interface RouteContext {
+  readonly params: Promise<{ readonly id: string }>;
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value)
-  );
-}
-
-export async function GET(_request: Request, context: RouteContext) {
+export async function GET(
+  request: Request,
+  context: RouteContext,
+): Promise<Response> {
   const params = routeIdParamsSchema.safeParse(await context.params);
 
   if (!params.success) {
-    return Response.json(
+    return jsonResponse(
       { error: getValidationErrorMessage(params.error) },
-      { status: 400 }
+      { status: 400 },
     );
+  }
+
+  const principal = await getSessionPrincipal(request);
+
+  if (principal === null) {
+    return jsonResponse({ error: 'Authentication required.' }, { status: 401 });
   }
 
   try {
-    const assessment = await prisma.assessment.findUnique({
-      where: {
-        id: params.data.id,
-      },
-      select: {
-        id: true,
-        userId: true,
-        gender: true,
-        goal: true,
-        age: true,
-        heightCm: true,
-        weightKg: true,
-        targetWeightKg: true,
-        workoutFrequency: true,
-        email: true,
-        name: true,
-        answers: true,
-        currentStep: true,
-        status: true,
-      },
+    const assessment = await prisma.assessment.findFirst({
+      where: { id: params.data.id, userId: principal.userId },
+      select: ASSESSMENT_PUBLIC_SELECT,
     });
 
-    if (!assessment) {
-      return Response.json({ error: "Assessment not found." }, { status: 404 });
+    if (assessment === null) {
+      return jsonResponse({ error: 'Assessment not found.' }, { status: 404 });
     }
 
-    return Response.json(assessment);
-  } catch {
-    return Response.json(
-      { error: "Failed to load assessment." },
-      { status: 500 }
+    return jsonResponse(assessment);
+  } catch (error: unknown) {
+    console.error('Failed to load an assessment.', error);
+    return jsonResponse(
+      { error: 'Failed to load assessment.' },
+      { status: 500 },
     );
   }
 }
 
-export async function PATCH(request: Request, context: RouteContext) {
+export async function PATCH(
+  request: Request,
+  context: RouteContext,
+): Promise<Response> {
+  const originError = verifySameOrigin(request);
+
+  if (originError !== undefined) {
+    return originError;
+  }
+
   const params = routeIdParamsSchema.safeParse(await context.params);
 
   if (!params.success) {
-    return Response.json(
+    return jsonResponse(
       { error: getValidationErrorMessage(params.error) },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
@@ -92,61 +76,66 @@ export async function PATCH(request: Request, context: RouteContext) {
   try {
     body = await readJsonBody(request);
   } catch {
-    return Response.json({ error: "Request body must be valid JSON." }, { status: 400 });
+    return invalidJsonResponse();
   }
 
   const parsed = updateAssessmentSchema.safeParse(body);
-//校验body字段
+
   if (!parsed.success) {
-    return Response.json(
+    return jsonResponse(
       { error: getValidationErrorMessage(parsed.error) },
-      { status: 400 }
+      { status: 400 },
     );
+  }
+
+  const principal = await getSessionPrincipal(request);
+
+  if (principal === null) {
+    return jsonResponse({ error: 'Authentication required.' }, { status: 401 });
   }
 
   try {
-    const existing = await prisma.assessment.findUnique({
-      where: {
-        id: params.data.id,
-      },
+    const existing = await prisma.assessment.findFirst({
+      where: { id: params.data.id, userId: principal.userId },
       select: {
-        answers: true,
+        status: true,
+        gender: true,
+        goal: true,
+        age: true,
+        heightCm: true,
+        weightKg: true,
+        targetWeightKg: true,
+        workoutFrequency: true,
       },
     });
 
-    if (!existing) {
-      return Response.json({ error: "Assessment not found." }, { status: 404 });
+    if (existing === null) {
+      return jsonResponse({ error: 'Assessment not found.' }, { status: 404 });
     }
 
-    const { answers, ...coreFields } = parsed.data;
-    const data: Prisma.AssessmentUpdateInput = {
-      ...coreFields,
-    };
-
-    if (answers !== undefined) {
-      const existingAnswers = isPlainObject(existing.answers) ? existing.answers : {};
-      data.answers = {
-        ...existingAnswers,
-        ...answers,
-      } as Prisma.InputJsonObject;
+    if (existing.status !== 'in_progress') {
+      return jsonResponse(
+        { error: 'Only an in-progress assessment can be updated.' },
+        { status: 409 },
+      );
     }
 
+    const answers = { ...parsed.data };
+    delete answers.currentStep;
+    const merged = { ...existing, ...answers };
+    const currentStep = getDerivedCurrentStep(merged);
     const updated = await prisma.assessment.update({
-      where: {
-        id: params.data.id,
-      },
-      data,
-      select: {
-        currentStep: true,
-      },
+      where: { id: params.data.id },
+      data: { ...answers, currentStep },
+      select: { currentStep: true },
     });
 
-    return Response.json({ ok: true, currentStep: updated.currentStep });
-  } catch {
-    return Response.json(
-      { error: "Failed to update assessment." },
-      { status: 500 }
+    return jsonResponse({ ok: true, currentStep: updated.currentStep });
+  } catch (error: unknown) {
+    console.error('Failed to update an assessment.', error);
+    return jsonResponse(
+      { error: 'Failed to update assessment.' },
+      { status: 500 },
     );
   }
 }
-

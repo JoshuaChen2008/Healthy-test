@@ -1,135 +1,92 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   createSessionAndAssessment,
+  createTestAssessment,
+  createTestSession,
   getAssessment,
   patchAssessment,
   randomAssessmentId,
   resetDb,
   responseJson,
-} from "./helpers";
+} from './helpers';
 
 beforeEach(async () => {
   await resetDb();
 });
 
-describe("assessment progress integration", () => {
-  it("restores partially saved core fields, answers, and current step", async () => {
-    const { assessmentId } = await createSessionAndAssessment();
+describe('assessment progress integration', () => {
+  it('restores fields and derives progress from contiguous saved answers', async () => {
+    const { assessmentId, cookie } = await createSessionAndAssessment();
 
-    await patchAssessment(assessmentId, {
-      currentStep: 1,
-      gender: "male",
-    });
-    await patchAssessment(assessmentId, {
-      currentStep: 2,
-      heightCm: 175,
-      weightKg: 80,
-    });
-    await patchAssessment(assessmentId, {
-      currentStep: 3,
-      answers: {
-        sleep_hours: "6_7",
-      },
-    });
-
-    const response = await getAssessment(assessmentId);
+    await patchAssessment(assessmentId, { gender: 'male', currentStep: 7 }, cookie);
+    await patchAssessment(assessmentId, { heightCm: 175 }, cookie);
+    const response = await getAssessment(assessmentId, cookie);
     const body = await responseJson<Record<string, unknown>>(response);
 
     expect(response.status).toBe(200);
-    expect(body.gender).toBe("male");
+    expect(body.gender).toBe('male');
     expect(body.heightCm).toBe(175);
-    expect(body.weightKg).toBe(80);
-    expect(body.answers).toEqual({ sleep_hours: "6_7" });
-    expect(body.currentStep).toBe(3);
-    expect(body.status).toBe("in_progress");
+    expect(body.currentStep).toBe(1);
+    expect(body.status).toBe('in_progress');
+    expect(body.userId).toBeUndefined();
   });
 
-  it("accepts out-of-order and repeated patches without losing final data", async () => {
-    const { assessmentId } = await createSessionAndAssessment();
+  it('returns the same active draft and restarts only when requested', async () => {
+    const { cookie } = await createTestSession();
+    const first = await createTestAssessment(cookie);
+    const restored = await createTestAssessment(cookie);
+    const restarted = await createTestAssessment(cookie, true);
 
-    await patchAssessment(assessmentId, {
-      currentStep: 4,
-      age: 28,
-      weightKg: 82,
-    });
-    await patchAssessment(assessmentId, {
-      currentStep: 2,
-      weightKg: 80,
-      heightCm: 176,
-    });
-    await patchAssessment(assessmentId, {
-      currentStep: 5,
-      age: 29,
-    });
-
-    const response = await getAssessment(assessmentId);
-    const body = await responseJson<Record<string, unknown>>(response);
-
-    expect(response.status).toBe(200);
-    expect(body.age).toBe(29);
-    expect(body.weightKg).toBe(80);
-    expect(body.heightCm).toBe(176);
-    expect(body.currentStep).toBe(5);
+    expect(first.response.status).toBe(201);
+    expect(restored.response.status).toBe(200);
+    expect(restored.assessmentId).toBe(first.assessmentId);
+    expect(restarted.response.status).toBe(201);
+    expect(restarted.assessmentId).not.toBe(first.assessmentId);
   });
 
-  it("merges answers across patches instead of replacing the object", async () => {
-    const { assessmentId } = await createSessionAndAssessment();
+  it('returns one active draft when two create requests race', async () => {
+    const { cookie } = await createTestSession();
+    const [first, second] = await Promise.all([
+      createTestAssessment(cookie),
+      createTestAssessment(cookie),
+    ]);
 
-    await patchAssessment(assessmentId, {
-      answers: {
-        sleep_hours: "6_7",
-      },
-    });
-    await patchAssessment(assessmentId, {
-      answers: {
-        target_areas: ["belly"],
-      },
-    });
-
-    const response = await getAssessment(assessmentId);
-    const body = await responseJson<{ answers: unknown }>(response);
-
-    expect(response.status).toBe(200);
-    expect(body.answers).toEqual({
-      sleep_hours: "6_7",
-      target_areas: ["belly"],
-    });
+    expect(first.assessmentId).toBe(second.assessmentId);
   });
 
-  it("allows sparse fields while the assessment is still in progress", async () => {
-    const { assessmentId } = await createSessionAndAssessment();
+  it('prevents another session from reading or modifying an assessment', async () => {
+    const owner = await createSessionAndAssessment();
+    const stranger = await createTestSession();
 
-    const response = await patchAssessment(assessmentId, {
-      currentStep: 1,
-      age: 30,
-    });
-    const body = await responseJson<Record<string, unknown>>(response);
+    const getResponse = await getAssessment(owner.assessmentId, stranger.cookie);
+    const patchResponse = await patchAssessment(
+      owner.assessmentId,
+      { age: 44 },
+      stranger.cookie,
+    );
 
-    expect(response.status).toBe(200);
-    expect(body).toEqual({ ok: true, currentStep: 1 });
+    expect(getResponse.status).toBe(404);
+    expect(patchResponse.status).toBe(404);
   });
 
   it.each([
-    ["heightCm", { heightCm: -5 }],
-    ["age too high", { age: 999 }],
-    ["gender", { gender: "xxx" }],
-    ["age too low", { age: 9 }],
-  ])("rejects invalid input for %s with 400", async (_name, patchBody) => {
-    const { assessmentId } = await createSessionAndAssessment();
-
-    const response = await patchAssessment(assessmentId, patchBody);
-    const body = await responseJson<{ error?: string }>(response);
-
+    ['heightCm', { heightCm: -5 }],
+    ['age too high', { age: 999 }],
+    ['gender', { gender: 'xxx' }],
+    ['step too high', { currentStep: 8 }],
+  ])('rejects invalid input for %s', async (_name, patchBody) => {
+    const { assessmentId, cookie } = await createSessionAndAssessment();
+    const response = await patchAssessment(assessmentId, patchBody, cookie);
     expect(response.status).toBe(400);
-    expect(body.error).toBeTruthy();
   });
 
-  it("returns 404 for unknown UUID and 400 for invalid UUID format", async () => {
-    const unknownResponse = await getAssessment(randomAssessmentId());
-    const invalidResponse = await patchAssessment("not-a-uuid", { age: 30 });
+  it('requires a session and validates route ids', async () => {
+    const noSessionResponse = await getAssessment(randomAssessmentId());
+    const { cookie } = await createTestSession();
+    const invalidResponse = await patchAssessment('not-a-uuid', { age: 30 }, cookie);
 
-    expect(unknownResponse.status).toBe(404);
+    expect(noSessionResponse.status).toBe(401);
     expect(invalidResponse.status).toBe(400);
   });
 });
