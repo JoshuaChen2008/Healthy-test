@@ -1,44 +1,56 @@
-import { prisma } from "@/lib/prisma";
-import { getValidationErrorMessage, routeIdParamsSchema } from "@/lib/validation";
+import { getSessionPrincipal } from '@/lib/auth';
+import { jsonResponse } from '@/lib/http';
+import { prisma } from '@/lib/prisma';
+import { getValidationErrorMessage, routeIdParamsSchema } from '@/lib/validation';
 
-type RouteContext = {
-  params: Promise<{
-    id: string;
-  }>;
-};
+interface RouteContext {
+  readonly params: Promise<{ readonly id: string }>;
+}
 
-export async function GET(_request: Request, context: RouteContext) {
+export async function GET(
+  request: Request,
+  context: RouteContext,
+): Promise<Response> {
   const params = routeIdParamsSchema.safeParse(await context.params);
 
   if (!params.success) {
-    return Response.json(
+    return jsonResponse(
       { error: getValidationErrorMessage(params.error) },
       { status: 400 },
     );
   }
 
+  const principal = await getSessionPrincipal(request);
+
+  if (principal === null) {
+    return jsonResponse({ error: 'Authentication required.' }, { status: 401 });
+  }
+
   try {
-    const assessment = await prisma.assessment.findUnique({
-      where: {
-        id: params.data.id,
-      },
+    const assessment = await prisma.assessment.findFirst({
+      where: { id: params.data.id, userId: principal.userId },
       select: {
         id: true,
-        userId: true,
         status: true,
         bmi: true,
         recommendedCalories: true,
         targetDate: true,
+        user: {
+          select: {
+            email: true,
+            subscription: { select: { status: true } },
+          },
+        },
       },
     });
 
-    if (!assessment) {
-      return Response.json({ error: "Assessment not found." }, { status: 404 });
+    if (assessment === null) {
+      return jsonResponse({ error: 'Assessment not found.' }, { status: 404 });
     }
 
-    if (assessment.status !== "completed") {
-      return Response.json(
-        { error: "Assessment not submitted yet." },
+    if (assessment.status !== 'completed') {
+      return jsonResponse(
+        { error: 'Assessment not submitted yet.' },
         { status: 409 },
       );
     }
@@ -48,48 +60,40 @@ export async function GET(_request: Request, context: RouteContext) {
       assessment.recommendedCalories === null ||
       assessment.targetDate === null
     ) {
-      return Response.json(
-        { error: "Assessment result not available." },
+      return jsonResponse(
+        { error: 'Assessment result not available.' },
         { status: 500 },
       );
     }
 
-    const subscription = await prisma.subscription.findUnique({
-      where: {
-        userId: assessment.userId,
-      },
-      select: {
-        status: true,
-      },
-    });
+    const isActiveMember =
+      assessment.user.email !== null &&
+      assessment.user.subscription?.status === 'active';
 
-    const membership = subscription?.status ?? "free";
-
-    if (membership === "active") {
-      return Response.json({
+    if (isActiveMember) {
+      return jsonResponse({
         assessmentId: assessment.id,
         status: assessment.status,
-        membership,
+        membership: 'active',
         bmi: assessment.bmi,
         recommendedCalories: assessment.recommendedCalories,
         targetDate: assessment.targetDate.toISOString(),
       });
     }
 
-    return Response.json({
+    return jsonResponse({
       assessmentId: assessment.id,
       status: assessment.status,
-      membership: "free",
+      membership: 'free',
       bmi: assessment.bmi,
       recommendedCalories: assessment.recommendedCalories,
-      locked: {
-        targetDate: true,
-      },
-      upsell: "解锁完整结果，查看你的目标达成日期与个性化计划",
+      locked: { targetDate: true },
+      upsell: '解锁完整结果，查看你的目标达成日期与个性化计划。',
     });
-  } catch {
-    return Response.json(
-      { error: "Failed to load assessment result." },
+  } catch (error: unknown) {
+    console.error('Failed to load an assessment result.', error);
+    return jsonResponse(
+      { error: 'Failed to load assessment result.' },
       { status: 500 },
     );
   }

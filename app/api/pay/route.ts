@@ -1,68 +1,57 @@
-import { prisma } from "@/lib/prisma";
-import { getValidationErrorMessage, paySchema } from "@/lib/validation";
+import { getSessionPrincipal } from '@/lib/auth';
+import { invalidJsonResponse, jsonResponse, readJsonBody } from '@/lib/http';
+import { prisma } from '@/lib/prisma';
+import { verifySameOrigin } from '@/lib/request-security';
+import { emptyBodySchema, getValidationErrorMessage } from '@/lib/validation';
 
-async function readJsonBody(request: Request) {
-  const text = await request.text();
+export async function POST(request: Request): Promise<Response> {
+  const originError = verifySameOrigin(request);
 
-  if (!text.trim()) {
-    return {};
+  if (originError !== undefined) {
+    return originError;
   }
 
-  return JSON.parse(text) as unknown;
-}
-
-export async function POST(request: Request) {
   let body: unknown;
 
   try {
     body = await readJsonBody(request);
   } catch {
-    return Response.json({ error: "Request body must be valid JSON." }, { status: 400 });
+    return invalidJsonResponse();
   }
 
-  const parsed = paySchema.safeParse(body);
+  const parsed = emptyBodySchema.safeParse(body);
 
   if (!parsed.success) {
-    return Response.json(
+    return jsonResponse(
       { error: getValidationErrorMessage(parsed.error) },
       { status: 400 },
     );
   }
 
+  const principal = await getSessionPrincipal(request);
+
+  if (principal === null || principal.email === null) {
+    return jsonResponse({ error: 'Registered account required.' }, { status: 401 });
+  }
+
   try {
-    const user = await prisma.user.findUnique({
-      where: {
-        id: parsed.data.userId,
-      },
-      select: {
-        id: true,
-      },
-    });
-
-    if (!user) {
-      return Response.json({ error: "User not found." }, { status: 404 });
-    }
-
     const subscription = await prisma.subscription.upsert({
-      where: {
-        userId: user.id,
-      },
-      update: {
-        status: "active",
-        paidAt: new Date(),
-      },
+      where: { userId: principal.userId },
+      update: { status: 'active', paidAt: new Date() },
       create: {
-        userId: user.id,
-        status: "active",
+        userId: principal.userId,
+        status: 'active',
         paidAt: new Date(),
       },
-      select: {
-        status: true,
-      },
+      select: { status: true },
     });
 
-    return Response.json({ status: subscription.status });
-  } catch {
-    return Response.json({ error: "Failed to process payment." }, { status: 500 });
+    return jsonResponse({ status: subscription.status });
+  } catch (error: unknown) {
+    console.error('Failed to process the simulated payment.', error);
+    return jsonResponse(
+      { error: 'Failed to process payment.' },
+      { status: 500 },
+    );
   }
 }

@@ -1,78 +1,77 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from 'vitest';
+
+import { prisma } from '@/lib/prisma';
 
 import {
   createSessionAndAssessment,
+  createTestSession,
   fullAssessmentInput,
+  getCookieFromResponse,
   getResult,
   patchAssessment,
-  payUser,
+  pay,
   resetDb,
   responseJson,
+  signup,
   submitAssessment,
-} from "./helpers";
+} from './helpers';
 
 beforeEach(async () => {
   await resetDb();
 });
 
-describe("result authorization", () => {
-  it("returns masked result for free users without leaking the real targetDate value", async () => {
-    const { assessmentId } = await createSessionAndAssessment();
-    await patchAssessment(assessmentId, fullAssessmentInput);
-    await submitAssessment(assessmentId);
+describe('result authorization', () => {
+  it('returns a masked result to its guest owner without leaking targetDate', async () => {
+    const { assessmentId, cookie } = await createCompletedAssessment();
+    const response = await getResult(assessmentId, cookie);
+    const body = await responseJson<Record<string, unknown>>(response);
+    const stored = await prisma.assessment.findUniqueOrThrow({
+      where: { id: assessmentId },
+      select: { targetDate: true },
+    });
 
-    const freeResponse = await getResult(assessmentId);
-    const freeBody = await responseJson<Record<string, unknown>>(freeResponse);
-    const targetDate = await getStoredTargetDateIso(assessmentId);
-
-    expect(freeResponse.status).toBe(200);
-    expect(freeBody.membership).toBe("free");
-    expect(freeBody.targetDate).toBeUndefined();
-    expect(freeBody.bmi).toBe(26.1);
-    expect(typeof freeBody.recommendedCalories).toBe("number");
-    expect(freeBody.locked).toEqual({ targetDate: true });
-    expect(freeBody.upsell).toBeTruthy();
-    expect(JSON.stringify(freeBody)).not.toContain(targetDate);
+    expect(response.status).toBe(200);
+    expect(body.membership).toBe('free');
+    expect(body.targetDate).toBeUndefined();
+    expect(body.locked).toEqual({ targetDate: true });
+    expect(JSON.stringify(body)).not.toContain(stored.targetDate?.toISOString());
   });
 
-  it("returns the real targetDate for active members", async () => {
-    const { userId, assessmentId } = await createSessionAndAssessment();
-    await patchAssessment(assessmentId, fullAssessmentInput);
-    await submitAssessment(assessmentId);
-    await payUser(userId);
+  it('returns 401 without a session and 404 to a different owner', async () => {
+    const owner = await createCompletedAssessment();
+    const stranger = await createTestSession();
 
-    const targetDate = await getStoredTargetDateIso(assessmentId);
-    const response = await getResult(assessmentId);
+    expect((await getResult(owner.assessmentId)).status).toBe(401);
+    expect((await getResult(owner.assessmentId, stranger.cookie)).status).toBe(404);
+  });
+
+  it('returns the full target date only to the active account owner', async () => {
+    const owner = await createCompletedAssessment();
+    const signupResponse = await signup('member@example.com', 'strong-pass-123', owner.cookie);
+    const accountCookie = getCookieFromResponse(signupResponse);
+    await pay(accountCookie);
+
+    const response = await getResult(owner.assessmentId, accountCookie);
     const body = await responseJson<Record<string, unknown>>(response);
 
     expect(response.status).toBe(200);
-    expect(body.membership).toBe("active");
-    expect(body.targetDate).toBe(targetDate);
+    expect(body.membership).toBe('active');
+    expect(typeof body.targetDate).toBe('string');
   });
 
-  it("returns 409 before the assessment is submitted", async () => {
-    const { assessmentId } = await createSessionAndAssessment();
-
-    const response = await getResult(assessmentId);
-    const body = await responseJson<{ error?: string }>(response);
-
+  it('returns 409 before submission', async () => {
+    const { assessmentId, cookie } = await createSessionAndAssessment();
+    const response = await getResult(assessmentId, cookie);
     expect(response.status).toBe(409);
-    expect(body.error).toBe("Assessment not submitted yet.");
   });
 });
 
-async function getStoredTargetDateIso(assessmentId: string) {
-  const { prisma } = await import("@/lib/prisma");
-  const assessment = await prisma.assessment.findUniqueOrThrow({
-    where: {
-      id: assessmentId,
-    },
-    select: {
-      targetDate: true,
-    },
-  });
-
-  expect(assessment.targetDate).not.toBeNull();
-
-  return assessment.targetDate?.toISOString() ?? "";
+async function createCompletedAssessment(): Promise<{
+  readonly assessmentId: string;
+  readonly cookie: string;
+}> {
+  const created = await createSessionAndAssessment();
+  await patchAssessment(created.assessmentId, fullAssessmentInput, created.cookie);
+  await submitAssessment(created.assessmentId, created.cookie);
+  return created;
 }

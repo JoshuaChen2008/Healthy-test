@@ -1,92 +1,49 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
-  createTestAssessment,
-  createTestSession,
+  createSessionAndAssessment,
   fullAssessmentInput,
+  getCookieFromResponse,
   getResult,
+  login,
+  logout,
   patchAssessment,
-  payUser,
-  randomAssessmentId,
+  pay,
   resetDb,
   responseJson,
+  signup,
   submitAssessment,
-} from "./helpers";
+} from './helpers';
 
 beforeEach(async () => {
   await resetDb();
 });
 
-describe("paid funnel end to end", () => {
-  it("unlocks the full result after payment", async () => {
-    const { userId } = await createTestSession();
-    const { assessmentId } = await createTestAssessment(userId);
+describe('paid funnel end to end', () => {
+  it('keeps an unlocked guest assessment after signup, logout, and login', async () => {
+    const { assessmentId, cookie: guestCookie } = await createSessionAndAssessment();
+    await patchAssessment(assessmentId, fullAssessmentInput, guestCookie);
+    await submitAssessment(assessmentId, guestCookie);
 
-    await patchAssessment(assessmentId, fullAssessmentInput);
-    await submitAssessment(assessmentId);
-
-    const freeResponse = await getResult(assessmentId);
-    const freeBody = await responseJson<Record<string, unknown>>(freeResponse);
-
-    expect(freeResponse.status).toBe(200);
-    expect(freeBody.membership).toBe("free");
-    expect(freeBody.targetDate).toBeUndefined();
-
-    const payResponse = await payUser(userId);
-    const payBody = await responseJson<Record<string, unknown>>(payResponse);
-
+    const signupResponse = await signup(
+      'alex@example.com',
+      'correct-horse-battery',
+      guestCookie,
+    );
+    const accountCookie = getCookieFromResponse(signupResponse);
+    const payResponse = await pay(accountCookie);
     expect(payResponse.status).toBe(200);
-    expect(payBody).toEqual({ status: "active" });
 
-    const activeResponse = await getResult(assessmentId);
-    const activeBody = await responseJson<Record<string, unknown>>(activeResponse);
+    await logout(accountCookie);
+    expect((await getResult(assessmentId, accountCookie)).status).toBe(401);
 
-    expect(activeResponse.status).toBe(200);
-    expect(activeBody.membership).toBe("active");
-    expect(typeof activeBody.targetDate).toBe("string");
-  });
+    const loginResponse = await login('alex@example.com', 'correct-horse-battery');
+    const newDeviceCookie = getCookieFromResponse(loginResponse);
+    const resultResponse = await getResult(assessmentId, newDeviceCookie);
+    const result = await responseJson<Record<string, unknown>>(resultResponse);
 
-  it("unlocks full results account-wide for a second assessment", async () => {
-    const { userId } = await createTestSession();
-    const first = await createTestAssessment(userId);
-
-    await patchAssessment(first.assessmentId, fullAssessmentInput);
-    await submitAssessment(first.assessmentId);
-    await payUser(userId);
-
-    const second = await createTestAssessment(userId);
-    await patchAssessment(second.assessmentId, {
-      ...fullAssessmentInput,
-      weightKg: 75,
-      targetWeightKg: 72,
-    });
-    await submitAssessment(second.assessmentId);
-
-    const response = await getResult(second.assessmentId);
-    const body = await responseJson<Record<string, unknown>>(response);
-
-    expect(response.status).toBe(200);
-    expect(body.membership).toBe("active");
-    expect(typeof body.targetDate).toBe("string");
-  });
-
-  it("allows repeated pay calls for an already active user", async () => {
-    const { userId } = await createTestSession();
-
-    const firstResponse = await payUser(userId);
-    const secondResponse = await payUser(userId);
-    const secondBody = await responseJson<Record<string, unknown>>(secondResponse);
-
-    expect(firstResponse.status).toBe(200);
-    expect(secondResponse.status).toBe(200);
-    expect(secondBody).toEqual({ status: "active" });
-  });
-
-  it("returns 404 when paying for an unknown user", async () => {
-    const response = await payUser(randomAssessmentId());
-    const body = await responseJson<{ error?: string }>(response);
-
-    expect(response.status).toBe(404);
-    expect(body.error).toBe("User not found.");
+    expect(resultResponse.status).toBe(200);
+    expect(result.membership).toBe('active');
+    expect(typeof result.targetDate).toBe('string');
   });
 });

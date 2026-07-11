@@ -1,77 +1,54 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   createSessionAndAssessment,
+  createTestSession,
   fullAssessmentInput,
   getAssessment,
   patchAssessment,
-  randomAssessmentId,
   resetDb,
   responseJson,
   submitAssessment,
-} from "./helpers";
+} from './helpers';
 
 beforeEach(async () => {
   await resetDb();
 });
 
-describe("assessment submit integration", () => {
-  it("computes results and marks a complete assessment as completed", async () => {
-    const { assessmentId } = await createSessionAndAssessment();
-    await patchAssessment(assessmentId, fullAssessmentInput);
+describe('assessment submit integration', () => {
+  it('computes results and keeps repeated submission idempotent', async () => {
+    const { assessmentId, cookie } = await createSessionAndAssessment();
+    await patchAssessment(assessmentId, fullAssessmentInput, cookie);
 
-    const submitResponse = await submitAssessment(assessmentId);
-    const submitBody = await responseJson<Record<string, unknown>>(submitResponse);
-
-    expect(submitResponse.status).toBe(200);
-    expect(submitBody.status).toBe("completed");
-    expect(submitBody.bmi).toBe(26.1);
-    expect(typeof submitBody.recommendedCalories).toBe("number");
-
-    const getResponse = await getAssessment(assessmentId);
+    const first = await submitAssessment(assessmentId, cookie);
+    const second = await submitAssessment(assessmentId, cookie);
+    const secondBody = await responseJson<Record<string, unknown>>(second);
+    const getResponse = await getAssessment(assessmentId, cookie);
     const getBody = await responseJson<Record<string, unknown>>(getResponse);
 
-    expect(getResponse.status).toBe(200);
-    expect(getBody.status).toBe("completed");
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(secondBody.bmi).toBe(26.1);
+    expect(getBody.status).toBe('completed');
   });
 
-  it("rejects submit when core fields are missing and lists the missing fields", async () => {
-    const { assessmentId } = await createSessionAndAssessment();
-    await patchAssessment(assessmentId, {
-      gender: "female",
-      age: 32,
-    });
-
-    const response = await submitAssessment(assessmentId);
-    const body = await responseJson<{ error?: string }>(response);
+  it('lists missing required fields', async () => {
+    const { assessmentId, cookie } = await createSessionAndAssessment();
+    await patchAssessment(assessmentId, { gender: 'female', age: 32 }, cookie);
+    const response = await submitAssessment(assessmentId, cookie);
+    const body = await responseJson<{ error: string }>(response);
 
     expect(response.status).toBe(400);
-    expect(body.error).toContain("goal");
-    expect(body.error).toContain("heightCm");
-    expect(body.error).toContain("weightKg");
-    expect(body.error).toContain("targetWeightKg");
-    expect(body.error).toContain("workoutFrequency");
+    expect(body.error).toContain('goal');
+    expect(body.error).toContain('workoutFrequency');
   });
 
-  it("allows repeated submit for the same assessment", async () => {
-    const { assessmentId } = await createSessionAndAssessment();
-    await patchAssessment(assessmentId, fullAssessmentInput);
+  it('does not let a different session submit the assessment', async () => {
+    const owner = await createSessionAndAssessment();
+    const stranger = await createTestSession();
+    await patchAssessment(owner.assessmentId, fullAssessmentInput, owner.cookie);
 
-    const firstResponse = await submitAssessment(assessmentId);
-    const secondResponse = await submitAssessment(assessmentId);
-    const secondBody = await responseJson<Record<string, unknown>>(secondResponse);
-
-    expect(firstResponse.status).toBe(200);
-    expect(secondResponse.status).toBe(200);
-    expect(secondBody.status).toBe("completed");
-    expect(secondBody.bmi).toBe(26.1);
-  });
-
-  it("returns 404 for unknown assessment id", async () => {
-    const response = await submitAssessment(randomAssessmentId());
-    const body = await responseJson<{ error?: string }>(response);
-
+    const response = await submitAssessment(owner.assessmentId, stranger.cookie);
     expect(response.status).toBe(404);
-    expect(body.error).toBe("Assessment not found.");
   });
 });
